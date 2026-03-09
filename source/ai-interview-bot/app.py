@@ -333,6 +333,24 @@ def _start_interview(role: str, count: int, jd_context: str = "", persona: str =
     st.session_state.followup_generated_for = []
 
 
+def _stop_interview() -> None:
+    st.session_state.interview_started = False
+    st.session_state.questions = []
+    st.session_state.question_sources = []
+    st.session_state.answers = []
+    st.session_state.evaluations = []
+    st.session_state.current_index = 0
+    st.session_state.active_question_index = -1
+
+    if "current_answer_input" in st.session_state:
+        del st.session_state["current_answer_input"]
+
+    st.session_state.interview_role = ""
+    st.session_state.reference_cache = {}
+    st.session_state.interviewer_cache = {}
+    st.session_state.followup_generated_for = []
+
+
 if not st.session_state.runtime_ready:
     st.markdown(
         """
@@ -573,7 +591,7 @@ with right_col:
             for h in hints:
                 st.caption(f"- {h}")
 
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         with c1:
             if st.button("Submit Answer", use_container_width=True):
                 st.session_state.answers[idx] = st.session_state.current_answer_input
@@ -639,6 +657,43 @@ with right_col:
                     st.rerun()
                 else:
                     st.success("Interview completed. Scroll down for summary.")
+
+        with c3:
+            if st.button("Stop Interview", use_container_width=True):
+
+                completed = [x for x in st.session_state.evaluations if x is not None]
+
+                if completed:
+                    signal = summarize_hiring_signal(
+                        role=interview_role,
+                        level=st.session_state.target_level,
+                        tone=tone_value,
+                        persona=persona_value,
+                        questions=st.session_state.questions,
+                        answers=st.session_state.answers,
+                        evaluations=st.session_state.evaluations,
+                    )
+
+                    report = generate_debrief_report(
+                        role=interview_role,
+                        level=st.session_state.target_level,
+                        tone=tone_value,
+                        persona=persona_value,
+                        questions=st.session_state.questions,
+                        answers=st.session_state.answers,
+                        evaluations=st.session_state.evaluations,
+                    )
+
+                    st.download_button(
+                        "Download Interview Report (.md)",
+                        data=report,
+                        file_name=f"interview_debrief_{interview_role.lower().replace(' ', '_')}.md",
+                        mime="text/markdown",
+                        use_container_width=True,
+                    )
+
+                _stop_interview()
+                st.rerun()
 
         if st.session_state.evaluations[idx] is not None:
             ev = st.session_state.evaluations[idx]
