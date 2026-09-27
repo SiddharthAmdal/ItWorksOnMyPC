@@ -14,7 +14,14 @@ from device_utils import get_device, get_pipeline_device
 DEFAULT_EVALUATOR_PROVIDER = os.getenv("EVALUATOR_PROVIDER", "local").strip().lower()
 DEFAULT_EVALUATOR_MODEL = os.getenv("EVALUATOR_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
 MODEL_FALLBACKS = ["Qwen/Qwen2.5-1.5B-Instruct", "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"]
-NIM_API_KEY = "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"
+_CONFIG_PATH = Path(__file__).parent / "config.json"
+NIM_API_KEY = ""
+if _CONFIG_PATH.exists():
+    with open(_CONFIG_PATH, "r") as f:
+        NIM_API_KEY = json.load(f).get("NIM_API_KEY", "")
+else:
+    NIM_API_KEY = os.getenv("NIM_API_KEY", "")
+
 DEFAULT_NIM_MODEL = os.getenv("NIM_MODEL", "meta/llama-3.2-11b-vision-instruct")
 KNOWN_ROLES = ["Backend", "AI Engineer", "Data Scientist", "Fullstack"]
 TONE_LABELS = {"easy": "Easy", "medium": "Medium", "strict": "Strict"}

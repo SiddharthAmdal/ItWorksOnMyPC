@@ -3,3 +3,4 @@
 node_modules/
 source/ai-interview-bot/node_modules/
 .DS_Store
+source/ai-interview-bot/config.json
