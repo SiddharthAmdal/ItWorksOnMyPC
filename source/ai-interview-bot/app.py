@@ -122,23 +122,9 @@ def _render_typing(
     if not text:
         return
 
+    container.write(text)
+    
     typed_done = st.session_state.get("typed_done", {})
-    if typed_done.get(anim_key):
-        container.write(text)
-        return
-
-    chars_per_second = max(1.0, (words_per_minute * 5) / 60.0)
-    total_chars = len(text)
-    chunk_size = 1
-    estimated_duration = total_chars / chars_per_second
-    if estimated_duration > max_duration_sec:
-        chunk_size = max(1, int(total_chars / (chars_per_second * max_duration_sec)))
-    delay = max(0.01, chunk_size / chars_per_second)
-
-    for i in range(0, total_chars, chunk_size):
-        container.write(text[: i + chunk_size])
-        time.sleep(delay)
-
     typed_done[anim_key] = True
     st.session_state.typed_done = typed_done
 
@@ -660,39 +646,7 @@ with right_col:
 
         with c3:
             if st.button("Stop Interview", use_container_width=True):
-
-                completed = [x for x in st.session_state.evaluations if x is not None]
-
-                if completed:
-                    signal = summarize_hiring_signal(
-                        role=interview_role,
-                        level=st.session_state.target_level,
-                        tone=tone_value,
-                        persona=persona_value,
-                        questions=st.session_state.questions,
-                        answers=st.session_state.answers,
-                        evaluations=st.session_state.evaluations,
-                    )
-
-                    report = generate_debrief_report(
-                        role=interview_role,
-                        level=st.session_state.target_level,
-                        tone=tone_value,
-                        persona=persona_value,
-                        questions=st.session_state.questions,
-                        answers=st.session_state.answers,
-                        evaluations=st.session_state.evaluations,
-                    )
-
-                    st.download_button(
-                        "Download Interview Report (.md)",
-                        data=report,
-                        file_name=f"interview_debrief_{interview_role.lower().replace(' ', '_')}.md",
-                        mime="text/markdown",
-                        use_container_width=True,
-                    )
-
-                _stop_interview()
+                st.session_state.interview_stopped_early = True
                 st.rerun()
 
         if st.session_state.evaluations[idx] is not None:
@@ -771,11 +725,11 @@ with right_col:
                 )
 
             # Real hiring signal and one-click debrief when the interview round is complete.
-            if len(completed) == len(questions):
+            if len(completed) == len(questions) or st.session_state.get("interview_stopped_early", False):
                 signal_key = (
                     f"{interview_role}|{st.session_state.target_level}|{tone_value}|{persona_value}|"
-                    f"{hash(tuple(st.session_state.questions))}|{hash(tuple(st.session_state.answers))}|"
-                    f"{hash(tuple(int(e.get('score', 1)) for e in completed))}"
+                    f"{len(st.session_state.questions)}|{len(st.session_state.answers)}|"
+                    f"{sum(int(e.get('score', 1)) for e in completed)}"
                 )
                 if signal_key not in st.session_state.hiring_signal_cache:
                     with st.spinner("Generating hiring signal and debrief report..."):
@@ -819,16 +773,26 @@ with right_col:
 
                 report_md = st.session_state.debrief_cache.get(signal_key, "")
                 if report_md:
+                    with st.expander("View Full Debrief Report", expanded=True):
+                        st.markdown(report_md)
+                        
                     st.download_button(
                         "Download Debrief Report (.md)",
                         data=report_md,
                         file_name=f"interview_debrief_{interview_role.lower().replace(' ', '_')}.md",
                         mime="text/markdown",
                         use_container_width=True,
+                        key="download_debrief_button_main",
                     )
 
             if st.button("Retake Interview", use_container_width=True):
+                st.session_state.interview_stopped_early = False
                 st.session_state.pending_retake = True
                 st.session_state.pending_retake_role = interview_role
                 st.session_state.pending_retake_count = question_count
                 st.rerun()
+
+            if st.session_state.get("interview_stopped_early", False):
+                if st.button("Go to Home", use_container_width=True):
+                    _stop_interview()
+                    st.rerun()

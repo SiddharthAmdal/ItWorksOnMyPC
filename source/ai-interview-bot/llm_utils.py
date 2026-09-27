@@ -14,10 +14,8 @@ from device_utils import get_device, get_pipeline_device
 DEFAULT_EVALUATOR_PROVIDER = os.getenv("EVALUATOR_PROVIDER", "local").strip().lower()
 DEFAULT_EVALUATOR_MODEL = os.getenv("EVALUATOR_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
 MODEL_FALLBACKS = ["Qwen/Qwen2.5-1.5B-Instruct", "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"]
-DEFAULT_PUTER_MODEL = os.getenv("PUTER_MODEL", "google/gemini-2.5-flash-lite")
-PUTER_AUTH_TOKEN_ENV = "PUTER_AUTH_TOKEN"
-PUTER_TIMEOUT_SECONDS = int(os.getenv("PUTER_TIMEOUT_SECONDS", "120"))
-PUTER_BRIDGE_PATH = Path(__file__).with_name("puter_bridge.js")
+NIM_API_KEY = "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"
+DEFAULT_NIM_MODEL = os.getenv("NIM_MODEL", "meta/llama-3.2-11b-vision-instruct")
 KNOWN_ROLES = ["Backend", "AI Engineer", "Data Scientist", "Fullstack"]
 TONE_LABELS = {"easy": "Easy", "medium": "Medium", "strict": "Strict"}
 TONE_SCORE_BIAS = {"easy": 1, "medium": 0, "strict": -1}
@@ -37,14 +35,14 @@ COMPETENCY_DIMENSIONS = [
 
 def get_evaluator_provider() -> str:
     provider = DEFAULT_EVALUATOR_PROVIDER
-    if provider in {"puter", "puter-gemini", "gemini"}:
-        return "puter"
+    if provider in {"puter", "puter-gemini", "gemini", "nim"}:
+        return "nim"
     return "local"
 
 
 def get_evaluator_backend_label() -> str:
-    if get_evaluator_provider() == "puter":
-        return f"Puter Gemini ({DEFAULT_PUTER_MODEL})"
+    if get_evaluator_provider() == "nim":
+        return f"Nvidia NIM ({DEFAULT_NIM_MODEL})"
     return f"Local HF ({DEFAULT_EVALUATOR_MODEL})"
 
 
@@ -112,87 +110,39 @@ def _run_local_chat(system_prompt: str, user_prompt: str, max_new_tokens: int) -
     return _extract_generated_text(output_item, user_prompt)
 
 
-def _extract_puter_text(raw: Any) -> str:
-    if isinstance(raw, str):
-        return raw.strip()
-    if isinstance(raw, dict):
-        if isinstance(raw.get("text"), str):
-            return raw["text"].strip()
-        message = raw.get("message")
-        if isinstance(message, dict):
-            content = message.get("content")
-            if isinstance(content, str):
-                return content.strip()
-            if isinstance(content, list):
-                chunks = []
-                for item in content:
-                    if isinstance(item, dict) and "text" in item:
-                        chunks.append(str(item["text"]))
-                    elif isinstance(item, str):
-                        chunks.append(item)
-                if chunks:
-                    return " ".join(chunks).strip()
-    return str(raw or "").strip()
+import urllib.request
+import urllib.error
 
-
-def _run_puter_chat(system_prompt: str, user_prompt: str, max_new_tokens: int) -> str:
-    if not PUTER_BRIDGE_PATH.exists():
-        raise RuntimeError(f"Puter bridge script missing: {PUTER_BRIDGE_PATH}")
-
-    auth_token = os.getenv(PUTER_AUTH_TOKEN_ENV, "").strip()
-    if not auth_token:
-        raise RuntimeError(
-            "Puter provider requires PUTER_AUTH_TOKEN. "
-            "Run `npm run puter:login` in source/ai-interview-bot and export the returned token."
-        )
-
-    payload = {
-        "system_prompt": system_prompt,
-        "user_prompt": user_prompt,
-        "model": DEFAULT_PUTER_MODEL,
-        "max_new_tokens": max_new_tokens,
+def _run_nim_chat(system_prompt: str, user_prompt: str, max_new_tokens: int) -> str:
+    url = "https://integrate.api.nvidia.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {NIM_API_KEY}",
+        "Content-Type": "application/json"
     }
-
-    proc = subprocess.run(
-        ["node", str(PUTER_BRIDGE_PATH)],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        timeout=PUTER_TIMEOUT_SECONDS,
-        check=False,
-        env={**os.environ, PUTER_AUTH_TOKEN_ENV: auth_token},
-    )
-    if proc.returncode != 0:
-        err = proc.stderr.strip() or proc.stdout.strip() or "Unknown Puter error."
-        raise RuntimeError(f"Puter chat failed: {err}")
-
-    raw_output = proc.stdout.strip()
-    if not raw_output:
-        raise RuntimeError("Puter chat failed: empty stdout.")
-
-    parsed: Optional[Dict[str, Any]] = None
-    for line in reversed([ln.strip() for ln in raw_output.splitlines() if ln.strip()]):
-        try:
-            candidate = json.loads(line)
-            if isinstance(candidate, dict):
-                parsed = candidate
-                break
-        except Exception:
-            continue
-    if parsed is None:
-        raise RuntimeError(f"Puter chat failed: invalid JSON output: {raw_output[:200]}")
-
-    text = _extract_puter_text(parsed.get("response") if "response" in parsed else parsed)
-    if not text:
-        text = _extract_puter_text(parsed)
-    if not text:
-        raise RuntimeError("Puter chat failed: empty response text.")
-    return text
+    payload = {
+        "model": DEFAULT_NIM_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "max_tokens": max_new_tokens,
+        "temperature": 0.5
+    }
+    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            return result["choices"][0]["message"]["content"].strip()
+    except urllib.error.HTTPError as e:
+        error_msg = e.read().decode("utf-8")
+        raise RuntimeError(f"NIM chat failed: HTTP {e.code} - {error_msg}")
+    except Exception as e:
+        raise RuntimeError(f"NIM chat failed: {e}")
 
 
 def _run_chat(system_prompt: str, user_prompt: str, max_new_tokens: int) -> str:
-    if get_evaluator_provider() == "puter":
-        return _run_puter_chat(system_prompt, user_prompt, max_new_tokens)
+    if get_evaluator_provider() == "nim":
+        return _run_nim_chat(system_prompt, user_prompt, max_new_tokens)
     return _run_local_chat(system_prompt, user_prompt, max_new_tokens)
 
 
